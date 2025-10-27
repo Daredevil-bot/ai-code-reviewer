@@ -1,44 +1,63 @@
 import express from "express";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import { Octokit } from "@octokit/rest";
+import bodyParser from "body-parser";
 
 dotenv.config();
 
 const app = express();
-app.use(express.json());
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
-const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN,
-});
+// ✅ Use raw body for signature verification
+app.use(
+  bodyParser.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
-app.get("/", (req, res) => {
-  res.send("✅ AI Code Reviewer Backend Running");
-});
+const GITHUB_WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
-// Fetch PR details manually
-app.get("/fetch-pr/:owner/:repo/:number", async (req, res) => {
-  try {
-    const { owner, repo, number } = req.params;
-    const { data: files } = await octokit.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: number,
-    });
+// ✅ Verify webhook signature
+function verifySignature(req) {
+  const signature = req.headers["x-hub-signature-256"];
+  const hmac = crypto.createHmac("sha256", GITHUB_WEBHOOK_SECRET);
+  const digest = `sha256=${hmac.update(req.rawBody).digest("hex")}`;
+  return signature === digest;
+}
 
-    const diffs = files.map((file) => ({
-      filename: file.filename,
-      patch: file.patch,
-    }));
+// 🌐 Basic route
+app.get("/", (_, res) => res.send("✅ Webhook server is live"));
 
-    res.json({
-      message: "Fetched PR files successfully",
-      diffs,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+// 📦 Webhook route
+app.post("/webhook", async (req, res) => {
+  if (!verifySignature(req)) {
+    return res.status(401).send("❌ Invalid signature");
   }
+
+  const event = req.headers["x-github-event"];
+  const payload = req.body;
+
+  if (event === "pull_request" && payload.action === "opened") {
+    const pr = payload.pull_request;
+    console.log(`🆕 PR Opened: #${pr.number} by ${pr.user.login}`);
+    console.log(`Title: ${pr.title}`);
+
+    // Fetch changed files
+    const { data: files } = await octokit.pulls.listFiles({
+      owner: payload.repository.owner.login,
+      repo: payload.repository.name,
+      pull_number: pr.number,
+    });
+
+    console.log("📂 Changed files:");
+    files.forEach((file) => console.log(`- ${file.filename}`));
+  }
+
+  res.sendStatus(200);
 });
 
 const PORT = 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Webhook server running on port ${PORT}`));
