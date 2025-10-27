@@ -3,13 +3,14 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import { Octokit } from "@octokit/rest";
 import bodyParser from "body-parser";
+import OpenAI from "openai";
 
 dotenv.config();
 
 const app = express();
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ✅ Use raw body for signature verification
 app.use(
   bodyParser.json({
     verify: (req, res, buf) => {
@@ -28,8 +29,8 @@ function verifySignature(req) {
   return signature === digest;
 }
 
-// 🌐 Basic route
-app.get("/", (_, res) => res.send("✅ Webhook server is live"));
+// 🌐 Root route
+app.get("/", (_, res) => res.send("✅ Webhook server with AI Review is live"));
 
 // 📦 Webhook route
 app.post("/webhook", async (req, res) => {
@@ -42,22 +43,54 @@ app.post("/webhook", async (req, res) => {
 
   if (event === "pull_request" && payload.action === "opened") {
     const pr = payload.pull_request;
-    console.log(`🆕 PR Opened: #${pr.number} by ${pr.user.login}`);
-    console.log(`Title: ${pr.title}`);
+    const owner = payload.repository.owner.login;
+    const repo = payload.repository.name;
+    const prNumber = pr.number;
 
-    // Fetch changed files
+    console.log(`🆕 PR Opened: #${prNumber} by ${pr.user.login}`);
+
+    // 🧾 Fetch changed files
     const { data: files } = await octokit.pulls.listFiles({
-      owner: payload.repository.owner.login,
-      repo: payload.repository.name,
-      pull_number: pr.number,
+      owner,
+      repo,
+      pull_number: prNumber,
     });
 
-    console.log("📂 Changed files:");
-    files.forEach((file) => console.log(`- ${file.filename}`));
+    let diffSummary = "";
+    files.forEach((file) => {
+      diffSummary += `\n### ${file.filename}\n\`\`\`diff\n${file.patch?.slice(0, 2000) || ""}\n\`\`\`\n`;
+    });
+
+    // 🤖 Send to OpenAI for review
+    const reviewPrompt = `
+You are a senior code reviewer. Analyze the following GitHub Pull Request diffs and provide concise, constructive feedback.
+
+${diffSummary}
+    `;
+
+    const aiResponse = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are an expert software engineer reviewing code." },
+        { role: "user", content: reviewPrompt },
+      ],
+    });
+
+    const reviewComment = aiResponse.choices[0].message.content;
+
+    // 💬 Post comment on PR
+    await octokit.issues.createComment({
+      owner,
+      repo,
+      issue_number: prNumber,
+      body: `🤖 **AI Code Review Summary:**\n\n${reviewComment}`,
+    });
+
+    console.log("✅ AI review posted to PR!");
   }
 
   res.sendStatus(200);
 });
 
 const PORT = 3000;
-app.listen(PORT, () => console.log(`🚀 Webhook server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 AI Review Bot running on port ${PORT}`));
