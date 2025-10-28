@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  ai-code-reviewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-code-reviewer
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    # Optional: if you want live reload during local dev
+    # volumes:
+    #   - .:/app
