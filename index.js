@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
-import { Octokit } from "octokit";
+import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
 import fetch from "node-fetch";
 
